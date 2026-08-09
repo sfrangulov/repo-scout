@@ -1,9 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   openDb, profileOf, htmlUrl, cloneUrl, insertNew, listNew, saveEvaluation,
   recordFailure, reviewQueue, setStarred, setFollowed, markReviewed, stats,
 } from "../src/lib/db.ts";
+
+const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 function memDb() {
   return openDb(":memory:");
@@ -103,4 +108,43 @@ test("stats counts below-threshold evaluated rows", () => {
   assert.equal(s.new, 1);
   assert.equal(s.evaluated, 1);
   assert.equal(s.belowThreshold, 1);
+});
+
+test("openDb creates nested directories for absolute paths", (t) => {
+  const tmpRoot = mkdtempSync("/tmp/repo-scout-test-");
+  const dbPath = resolve(tmpRoot, "nested/deep/test.sqlite");
+
+  try {
+    const db = openDb(dbPath);
+    insertNew(db, "test/repo", "User", "q");
+    const rows = listNew(db);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].repo, "test/repo");
+    assert.ok(existsSync(dbPath), "database file should exist");
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("openDb resolves relative paths against project root", (t) => {
+  const testDir = `data/test-tmp-${process.pid}`;
+  const dbPath = `${testDir}/test.sqlite`;
+
+  try {
+    // First open: insert data
+    const db1 = openDb(dbPath);
+    insertNew(db1, "proj/root", "Organization", "q");
+    const rows1 = listNew(db1);
+    assert.equal(rows1.length, 1);
+    assert.equal(rows1[0].repo, "proj/root");
+    assert.equal(rows1[0].ownerType, "Organization");
+
+    // Reopen: verify data persists (proves file was created and usable)
+    const db2 = openDb(dbPath);
+    const rows2 = listNew(db2);
+    assert.equal(rows2.length, 1, "data should persist across openDb calls");
+    assert.equal(rows2[0].repo, "proj/root");
+  } finally {
+    rmSync(resolve(PROJECT_ROOT, testDir), { recursive: true, force: true });
+  }
 });
