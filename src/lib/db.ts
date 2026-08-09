@@ -114,7 +114,7 @@ export function recordFailure(
 export function reviewQueue(db: DatabaseSync, minScore: number): Entry[] {
   return db
     .prepare(
-      `SELECT * FROM entries WHERE status = 'evaluated' AND idea + skill >= ?
+      `SELECT * FROM entries WHERE status = 'evaluated' AND (idea + skill >= ? OR security_flag = 1)
        ORDER BY security_flag ASC, idea + skill DESC`,
     )
     .all(minScore)

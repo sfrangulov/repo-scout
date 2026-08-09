@@ -79,6 +79,23 @@ test("reviewQueue filters by threshold and sorts security-flagged last", () => {
   assert.equal(q[2].securityFlag, true);
 });
 
+test("reviewQueue always surfaces flagged repos even below threshold, sorted last", () => {
+  const db = memDb();
+  insertNew(db, "a/flagged-low", "User", "q");
+  saveEvaluation(db, "a/flagged-low", {
+    idea: 4, skill: 4, description: "d", securityFlag: true, securityReason: "steals keys",
+  });
+  insertNew(db, "a/clean-low", "User", "q");
+  saveEvaluation(db, "a/clean-low", {
+    idea: 4, skill: 4, description: "d", securityFlag: false, securityReason: "",
+  });
+  const q = reviewQueue(db, 12);
+  assert.deepEqual(q.map(e => e.repo), ["a/flagged-low"]);
+  assert.equal(q[0].securityFlag, true);
+  assert.equal(q[0].idea, 4);
+  assert.equal(q[0].skill, 4);
+});
+
 test("review actions: flags persist without status change, markReviewed closes", () => {
   const db = memDb();
   insertNew(db, "a/one", "User", "q");

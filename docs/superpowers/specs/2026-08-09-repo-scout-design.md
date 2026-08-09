@@ -151,8 +151,10 @@ CREATE TABLE IF NOT EXISTS entries (
    Шкала с якорями (1 = trivial, 5 = ordinary, 9 = strong) и
    malicious-скрин из followme (харвестинг секретов, exfiltration,
    обфусцированный exec, C2, тайпсквоттинг; «опрятность кода не снижает
-   подозрение»). Ответ парсится: первый `{...}`-блоб, `clamp` оценок в
-   [1, 10], коэрция `security_flag` из true/"true"/1.
+   подозрение»). Флагнутые репозитории сохраняют реальные оценки модели —
+   `security_flag` не занижает `idea`/`skill`. Ответ парсится: первый
+   `{...}`-блоб, `clamp` оценок в [1, 10], коэрция `security_flag` из
+   true/"true"/1.
 5. Успех → `UPDATE`: оценки, `status='evaluated'`, `evaluated_at`.
    Фейл (клон, пустой дайджест, оценка) → warning + `fail_count += 1`;
    при `fail_count >= 3` — `status='failed'`; git-ошибка
@@ -168,9 +170,11 @@ CREATE TABLE IF NOT EXISTS entries (
 
 `pnpm review` (= `node --no-warnings src/review.ts [--min-score N]`):
 
-Выборка: `status='evaluated' AND idea+skill >= threshold`, сортировка —
-сначала без security-флага, внутри по убыванию суммы. Флаг `--min-score`
-перекрывает `config.reviewThreshold`.
+Выборка: `status='evaluated' AND (idea+skill >= threshold OR security_flag=1)` —
+флагнутые репозитории попадают в очередь всегда, независимо от порога.
+Сортировка — сначала без security-флага, внутри по убыванию суммы; флагнутые
+идут последними, с предупреждением. Флаг `--min-score` перекрывает
+`config.reviewThreshold`.
 
 Пустая очередь — не ошибка: печатается сводка «очередь пуста: N оценено
 ниже порога (попробуй --min-score), M ждут оценки (запусти scan)»,

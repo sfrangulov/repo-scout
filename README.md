@@ -37,12 +37,23 @@ first) → one `claude -p` call returns strict JSON
 `{idea, skill, description, security_flag, security_reason}` → SQLite
 (`data/scout.sqlite`, single `entries` table).
 
-Repos the model flags as malicious are shown last with a warning — the
-human still decides. Repos that fail three times (or vanish) are parked
-as `failed`.
+Repos the model flags as malicious always enter the review queue,
+regardless of score, shown last with a warning — the human still decides.
+Repos that fail three times (or vanish) are parked as `failed`.
 
-`review`: walks evaluated entries with `idea + skill >= reviewThreshold`,
-best first. Every action calls `gh api` directly and is idempotent.
+`review`: walks evaluated entries with `idea + skill >= reviewThreshold`
+(plus every flagged repo, regardless of score), best first. Every action
+calls `gh api` directly and is idempotent.
+
+## Security notes
+
+Grades are advisory, not a security verdict. A cloned repository's own
+content — file names, README text, code comments — is untrusted input to
+the model and can attempt prompt injection (text trying to talk the
+grader into ignoring its instructions or inflating its own scores). The
+interactive human review step is the real gate before any star or follow.
+Symlinks are skipped while building the digest, so a malicious repo can't
+use one to read or leak files outside its own clone.
 
 ## Development
 
