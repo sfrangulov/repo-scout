@@ -124,13 +124,44 @@ CREATE TABLE IF NOT EXISTS entries (
   fail_count      INTEGER NOT NULL DEFAULT 0,
   starred         INTEGER NOT NULL DEFAULT 0,
   followed        INTEGER NOT NULL DEFAULT 0,
-  reviewed_at     TEXT                   -- UTC ISO-8601, ставится при status='reviewed'
+  reviewed_at     TEXT,                  -- UTC ISO-8601, ставится при status='reviewed'
+  author_followers    INTEGER,           -- author signal, best-effort (см. ниже)
+  author_public_repos INTEGER,
+  author_created_at   TEXT,
+  repo_stars      INTEGER,               -- из search-результата, на момент находки
+  repo_forks      INTEGER,
+  repo_pushed_at  TEXT,
+  repo_license    TEXT,                  -- spdx_id, с фолбэком на license.key
+  repo_language   TEXT
 );
 ```
 
-`interest`/`interest_reason` появились после первой версии; `openDb` держит
-guarded-миграцию (`PRAGMA table_info` → `ALTER TABLE ... ADD COLUMN`) для
-уже существующих файлов БД — `CREATE TABLE IF NOT EXISTS` их не добавит.
+`interest`/`interest_reason`, а затем author-signal-колонки появились после
+первой версии; `openDb` держит guarded-миграцию (`PRAGMA table_info` →
+`ALTER TABLE ... ADD COLUMN`) для уже существующих файлов БД —
+`CREATE TABLE IF NOT EXISTS` их не добавит.
+
+### Author signal (display-only)
+
+Эмпирика на живых данных (n=11 старов пользователя): `followers` и
+`public_repos` автора чисто разделяют его стары (2-29 followers, 7-41 repos)
+от junk/malware-аккаунтов (0-1 followers, 1-4 repos) из прошлых сканов;
+возраст аккаунта не разделяет. Сигнал — **только отображение и флаг
+внимания**, никогда не авто-reject и никогда не причина пропустить
+clone/evaluate: у пользователя интересов больше, чем у среднего джанк-автора,
+но встречаются и настоящие новички с полезным репо — решение остаётся за
+человеком в `review`.
+
+`repo_stars`/`repo_forks`/`repo_pushed_at`/`repo_license`/`repo_language`
+берутся из search-payload и пишутся при `insertNew` (на момент находки,
+не обновляются задним числом). `author_*` — отдельный `gh api GET
+users/<login>` сразу после успешной вставки нового кандидата (не для уже
+известных репо), best-effort: неудача лукапа не блокирует scan, поля
+остаются NULL.
+
+`isThinAuthor(entry)` (в `db.ts`) — чистая функция: `true`, когда
+`authorFollowers <= 1 && authorPublicRepos <= 5` (обе метрики не NULL).
+Пороги — из n=11 выборки, только для UI-подсказки в `review`.
 
 Жизненный цикл строки: `new` (найден) → `evaluated` (оценён) → `reviewed`
 (человек решил, `reviewed_at` заполнен). Ветка `failed` — терминальная для
@@ -150,10 +181,16 @@ guarded-миграцию (`PRAGMA table_info` → `ALTER TABLE ... ADD COLUMN`) 
    (`minStars`) и фильтры `fork:false archived:false` отсекают форки,
    архивные и совсем пустые репозитории уже на уровне запроса — до того,
    как они попадут в БД и будут стоить оценки моделью.
-   Из результатов берутся первые `perQuery` репозиториев, которых ещё нет
-   в БД (проверка по PK), вставка со статусом `new` + `owner_type` из
-   `owner.type`. Лимит GitHub Search — 30 запросов/мин с токеном;
-   8 запросов по одной странице — с запасом.
+   Из результатов пропускаются архивные и template-репозитории (проверка
+   `archived`/`is_template` на уровне payload — belt-and-braces поверх
+   фильтров запроса) и берутся первые `perQuery` репозиториев, которых ещё
+   нет в БД (проверка по PK), вставка со статусом `new` + `owner_type` из
+   `owner.type` + метаданные репо (`stars`, `forks`, `pushed_at`, `license`,
+   `language`) из того же search-результата. Сразу после успешной вставки —
+   `gh api GET users/<login>` за author signal (см. «Author signal» выше);
+   для уже известных репозиториев лукап не повторяется. Лимит GitHub
+   Search — 30 запросов/мин с токеном; 8 запросов по одной странице — с
+   запасом.
 2. Для каждой строки `status='new'` (с построчным прогрессом
    `[i/N] owner/repo → idea X skill Y interest Z` либо причиной пропуска):
    shallow clone (`git clone --depth 1 --quiet`, таймаут 180 с) во
@@ -222,6 +259,7 @@ skill (`config.minSkill`) фиксирован конфигом, отдельн�
   «Однофайловый ORM на dataclasses, ноль зависимостей»
   why: local-first SQLite CLI с committed embeddings, без SaaS-зависимости
   https://github.com/tinyorm/pico-db
+  ★12 · 3 forks · MIT · TypeScript · pushed 2026-08-05 · author: 15 followers / 22 repos
 
   [s]tar  [f]ollow  [b]oth  [o]pen  [n]ext  [q]uit
 ```
@@ -229,7 +267,13 @@ skill (`config.minSkill`) фиксирован конфигом, отдельн�
 Строка `why:` печатается только когда `interest_reason` непусто — одно
 предложение модели про конкретный механизм, который сыграл на interest.
 Кандидат с `security_flag` дополнительно показывает строку
-`⚠ SECURITY: <reason>` — решение всё равно за человеком.
+`SECURITY WARNING: <reason>` — решение всё равно за человеком. Тонкий
+автор (`isThinAuthor`, см. «Author signal») показывает рядом строку
+`THIN AUTHOR: <=1 follower, <=5 repos — typical of junk/malware accounts
+in past scans; scrutinize before starring` — тоже подсказка, не запрет.
+После URL — контекстная строка репо + автора (звёзды, форки, лицензия,
+язык, дата последнего пуша, followers/repos автора); части с NULL-данными
+просто опускаются, вплоть до полного отсутствия строки, если метаданных нет.
 Для `owner_type = 'Organization'` клавиши `[f]`/`[b]` не предлагаются
 (REST API умеет фолловить только пользователей); в подсказке остаются
 `[s]tar [o]pen [n]ext [q]uit`.
@@ -275,7 +319,11 @@ skill (`config.minSkill`) фиксирован конфигом, отдельн�
   README первым, игнор-каталоги, фильтр расширений, пустой результат).
 - `db`: in-memory sqlite — переходы new→evaluated→reviewed/failed,
   fail_count, идемпотентность вставки, выборка очереди ревью (порог,
-  сортировка, security-последние), вывод html_url/profile из PK.
+  сортировка, security-последние), вывод html_url/profile из PK, миграция
+  на старой схеме (interest + author-signal колонки), запись repo-метаданных
+  при вставке, `setAuthorMeta`, граничные случаи `isThinAuthor`.
+- `gh`: парсинг search-результата (метаданные + фолбэк лицензии), пропуск
+  archived/template, `fetchAuthor` (happy path + все варианты отказа → null).
 
 ## Чего сознательно нет (YAGNI)
 

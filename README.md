@@ -47,6 +47,14 @@ Repos the model flags as malicious always enter the review queue,
 regardless of score, shown last with a warning — the human still decides.
 Repos that fail three times (or vanish) are parked as `failed`.
 
+Each candidate card also shows repo context (stars, forks, license,
+language, last push) and author context (followers, public repos), fetched
+once when a repo is first found. This is display-only: it never filters,
+skips, or auto-rejects anything. An author with very few followers and
+repos gets a `THIN AUTHOR` attention flag on the card — empirically that
+pattern matched junk/malware accounts in past scans — but it's a nudge to
+look closer, not a verdict; the human still decides.
+
 `review`: walks evaluated entries with `interest >= interestThreshold AND
 skill >= minSkill` (plus every flagged repo, regardless of score), sorted
 by `interest` first, `idea + skill` as a tiebreaker. Every action calls
