@@ -28,9 +28,10 @@ function contextLine(entry: Entry): string {
   const parts: string[] = [];
   if (entry.repoStars !== null) parts.push(`★${entry.repoStars}`);
   if (entry.repoForks !== null) parts.push(`${entry.repoForks} forks`);
-  if (entry.repoLicense !== null) parts.push(entry.repoLicense);
-  if (entry.repoLanguage !== null) parts.push(entry.repoLanguage);
-  if (entry.repoPushedAt !== null) parts.push(`pushed ${entry.repoPushedAt.slice(0, 10)}`);
+  // Truthy checks (not just !== null) defensively skip empty strings too.
+  if (entry.repoLicense) parts.push(entry.repoLicense);
+  if (entry.repoLanguage) parts.push(entry.repoLanguage);
+  if (entry.repoPushedAt) parts.push(`pushed ${entry.repoPushedAt.slice(0, 10)}`);
 
   const authorParts: string[] = [];
   if (entry.authorFollowers !== null) authorParts.push(`${entry.authorFollowers} followers`);
@@ -43,8 +44,8 @@ function contextLine(entry: Entry): string {
 function show(entry: Entry, index: number, total: number): void {
   console.log("");
   console.log(
-    `[${index + 1}/${total}] ${entry.repo}   interest ${entry.interest?.toFixed(1)}` +
-    `  idea ${entry.idea?.toFixed(1)}  skill ${entry.skill?.toFixed(1)}   (query: ${entry.query})`,
+    `[${index + 1}/${total}] ${entry.repo}   interest ${entry.interest?.toFixed(1) ?? "-"}` +
+    `  idea ${entry.idea?.toFixed(1) ?? "-"}  skill ${entry.skill?.toFixed(1) ?? "-"}   (query: ${entry.query})`,
   );
   console.log(`  ${entry.description ?? ""}`);
   if (entry.interestReason) {
@@ -88,7 +89,7 @@ async function main(): Promise<void> {
   if (queue.length === 0) {
     const s = stats(db, minInterest, config.minSkill);
     console.log(
-      `queue is empty: ${s.belowThreshold} evaluated below ${minInterest}` +
+      `queue is empty: ${s.belowThreshold} evaluated below the interest/skill gate` +
       ` (try --min-interest), ${s.new} awaiting evaluation (run scan)`,
     );
     return;

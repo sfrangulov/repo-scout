@@ -5,7 +5,7 @@ export interface SearchItem {
   ownerType: "User" | "Organization";
   stars: number;
   forks: number;
-  pushedAt: string;
+  pushedAt: string | null;
   license: string | null;
   language: string | null;
 }
@@ -62,7 +62,7 @@ export function searchRepos(
       ownerType: item.owner.type === "Organization" ? "Organization" : "User",
       stars: item.stargazers_count ?? 0,
       forks: item.forks_count ?? 0,
-      pushedAt: item.pushed_at ?? "",
+      pushedAt: item.pushed_at ?? null,
       license: item.license?.spdx_id ?? item.license?.key ?? null,
       language: item.language ?? null,
     });

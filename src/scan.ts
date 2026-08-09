@@ -10,6 +10,7 @@ import { searchRepos, fetchAuthor, ensureGhReady } from "./lib/gh.ts";
 import { cloneShallow } from "./lib/clone.ts";
 import { buildDigest } from "./lib/digest.ts";
 import { evaluateRepo } from "./lib/evaluate.ts";
+import { bucketInterest } from "./lib/histogram.ts";
 import { run } from "./lib/run.ts";
 
 function ensureClaudeReady(): void {
@@ -94,9 +95,9 @@ function main(): void {
     }
   }
 
-  const low = runInterests.filter(v => v >= 1 && v <= 4).length;
-  const mid = runInterests.filter(v => v >= 5 && v <= 7).length;
-  const high = runInterests.filter(v => v >= 8 && v <= 10).length;
+  const low = runInterests.filter(v => bucketInterest(v) === "1-4").length;
+  const mid = runInterests.filter(v => bucketInterest(v) === "5-7").length;
+  const high = runInterests.filter(v => bucketInterest(v) === "8-10").length;
   console.log(`interest distribution: 1-4: ${low}  5-7: ${mid}  8-10: ${high}`);
 
   const s = stats(db, config.interestThreshold, config.minSkill);

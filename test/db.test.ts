@@ -14,7 +14,7 @@ import type { Entry } from "../src/lib/types.ts";
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 // Placeholder repo metadata for tests that don't care about its values.
-const noMeta: RepoMeta = { stars: 0, forks: 0, pushedAt: "", license: null, language: null };
+const noMeta: RepoMeta = { stars: 0, forks: 0, pushedAt: null, license: null, language: null };
 
 function memDb() {
   return openDb(":memory:");
@@ -168,6 +168,21 @@ test("stats counts below-gate evaluated rows, including NULL interest", () => {
   assert.equal(s.belowThreshold, 1);
 });
 
+test("stats belowThreshold complement is exact: also counts NULL skill, not just NULL interest", () => {
+  const db = memDb();
+  insertNew(db, "a/null-skill", "User", "q", noMeta);
+  saveEvaluation(db, "a/null-skill", {
+    idea: 5, skill: 5, interest: 7, interestReason: "fits",
+    description: "d", securityFlag: false, securityReason: "",
+  });
+  // Simulate a row whose skill ended up NULL (e.g. partial/legacy data) —
+  // belowThreshold must count it even though interest clears the gate.
+  db.exec("UPDATE entries SET skill = NULL WHERE repo = 'a/null-skill'");
+  const s = stats(db, 6, 4);
+  assert.equal(s.belowThreshold, 1);
+  assert.equal(reviewQueue(db, 6, 4).length, 0);
+});
+
 test("migrate: opening a database created with the pre-interest/author-signal schema adds the new columns", () => {
   const tmpRoot = mkdtempSync("/tmp/repo-scout-test-");
   const dbPath = resolve(tmpRoot, "legacy.sqlite");
@@ -271,6 +286,15 @@ test("insertNew stores repo metadata from the search result", () => {
   assert.equal(rows[0].repoPushedAt, "2026-08-05T10:00:00Z");
   assert.equal(rows[0].repoLicense, "MIT");
   assert.equal(rows[0].repoLanguage, "TypeScript");
+});
+
+test("insertNew accepts a null pushedAt (repo missing pushed_at) and stores it as NULL", () => {
+  const db = memDb();
+  insertNew(db, "a/no-push-date", "User", "q", {
+    stars: 1, forks: 0, pushedAt: null, license: null, language: null,
+  });
+  const rows = listNew(db);
+  assert.equal(rows[0].repoPushedAt, null);
 });
 
 test("insertNew leaves author fields NULL until setAuthorMeta is called; setAuthorMeta round-trips", () => {

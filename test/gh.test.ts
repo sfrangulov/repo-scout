@@ -60,6 +60,20 @@ test("searchRepos skips archived and template repos even if the query filter let
   assert.ok(!items.some(i => i.repo === "junk/template"));
 });
 
+test("searchRepos maps a missing pushed_at to null, not an empty string", () => {
+  const payload = JSON.stringify({
+    items: [{
+      full_name: "alice/no-push-date", owner: { login: "alice", type: "User" },
+      stargazers_count: 1, forks_count: 0, license: null, language: null,
+      // pushed_at intentionally omitted
+    }],
+  });
+  const fake: Runner = () => ({ status: 0, stdout: payload, stderr: "" });
+  const items = searchRepos(fake, "topic:mcp", 2, 200);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].pushedAt, null);
+});
+
 test("searchRepos throws on gh failure", () => {
   const fake: Runner = () => ({ status: 1, stdout: "", stderr: "rate limited" });
   assert.throws(() => searchRepos(fake, "q", 2, 200), /rate limited/);

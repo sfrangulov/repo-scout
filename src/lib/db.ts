@@ -125,7 +125,7 @@ function toEntry(row: Row): Entry {
 export interface RepoMeta {
   stars: number;
   forks: number;
-  pushedAt: string;
+  pushedAt: string | null;
   license: string | null;
   language: string | null;
 }
@@ -233,7 +233,7 @@ export function stats(db: DatabaseSync, minInterest: number, minSkill: number) {
     evaluated: one("SELECT COUNT(*) n FROM entries WHERE status = 'evaluated'"),
     belowThreshold: one(
       `SELECT COUNT(*) n FROM entries WHERE status = 'evaluated' AND security_flag = 0
-       AND (interest IS NULL OR interest < ? OR skill < ?)`,
+       AND (interest IS NULL OR skill IS NULL OR interest < ? OR skill < ?)`,
       minInterest, minSkill,
     ),
     reviewed: one("SELECT COUNT(*) n FROM entries WHERE status = 'reviewed'"),
