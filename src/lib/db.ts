@@ -24,10 +24,18 @@ CREATE TABLE IF NOT EXISTS entries (
   fail_count      INTEGER NOT NULL DEFAULT 0,
   starred         INTEGER NOT NULL DEFAULT 0,
   followed        INTEGER NOT NULL DEFAULT 0,
-  reviewed_at     TEXT
+  reviewed_at     TEXT,
+  author_followers    INTEGER,
+  author_public_repos INTEGER,
+  author_created_at   TEXT,
+  repo_stars      INTEGER,
+  repo_forks      INTEGER,
+  repo_pushed_at  TEXT,
+  repo_license    TEXT,
+  repo_language   TEXT
 )`;
 
-// Guards existing databases created before the interest columns existed.
+// Guards existing databases created before the interest/author-signal columns existed.
 function migrate(db: DatabaseSync): void {
   const columns = (db.prepare("PRAGMA table_info(entries)").all() as Array<{ name: string }>)
     .map(c => c.name);
@@ -36,6 +44,21 @@ function migrate(db: DatabaseSync): void {
   }
   if (!columns.includes("interest_reason")) {
     db.exec("ALTER TABLE entries ADD COLUMN interest_reason TEXT NOT NULL DEFAULT ''");
+  }
+  const authorSignalColumns: Array<[string, string]> = [
+    ["author_followers", "INTEGER"],
+    ["author_public_repos", "INTEGER"],
+    ["author_created_at", "TEXT"],
+    ["repo_stars", "INTEGER"],
+    ["repo_forks", "INTEGER"],
+    ["repo_pushed_at", "TEXT"],
+    ["repo_license", "TEXT"],
+    ["repo_language", "TEXT"],
+  ];
+  for (const [name, type] of authorSignalColumns) {
+    if (!columns.includes(name)) {
+      db.exec(`ALTER TABLE entries ADD COLUMN ${name} ${type}`);
+    }
   }
 }
 
@@ -88,16 +111,59 @@ function toEntry(row: Row): Entry {
     starred: row.starred === 1,
     followed: row.followed === 1,
     reviewedAt: (row.reviewed_at as string) ?? null,
+    authorFollowers: (row.author_followers as number) ?? null,
+    authorPublicRepos: (row.author_public_repos as number) ?? null,
+    authorCreatedAt: (row.author_created_at as string) ?? null,
+    repoStars: (row.repo_stars as number) ?? null,
+    repoForks: (row.repo_forks as number) ?? null,
+    repoPushedAt: (row.repo_pushed_at as string) ?? null,
+    repoLicense: (row.repo_license as string) ?? null,
+    repoLanguage: (row.repo_language as string) ?? null,
   };
 }
 
+export interface RepoMeta {
+  stars: number;
+  forks: number;
+  pushedAt: string;
+  license: string | null;
+  language: string | null;
+}
+
 export function insertNew(
-  db: DatabaseSync, repo: string, ownerType: string, query: string,
+  db: DatabaseSync, repo: string, ownerType: string, query: string, repoMeta: RepoMeta,
 ): boolean {
   const res = db
-    .prepare("INSERT OR IGNORE INTO entries (repo, owner_type, query, found_at) VALUES (?, ?, ?, ?)")
-    .run(repo, ownerType, query, now());
+    .prepare(
+      `INSERT OR IGNORE INTO entries
+       (repo, owner_type, query, found_at, repo_stars, repo_forks, repo_pushed_at, repo_license, repo_language)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      repo, ownerType, query, now(),
+      repoMeta.stars, repoMeta.forks, repoMeta.pushedAt, repoMeta.license, repoMeta.language,
+    );
   return res.changes === 1;
+}
+
+export function setAuthorMeta(
+  db: DatabaseSync, repo: string, meta: { followers: number; publicRepos: number; createdAt: string },
+): void {
+  db.prepare(
+    "UPDATE entries SET author_followers = ?, author_public_repos = ?, author_created_at = ? WHERE repo = ?",
+  ).run(meta.followers, meta.publicRepos, meta.createdAt, repo);
+}
+
+// Thresholds come from an n=11 empirical sample of this user's starred vs.
+// junk/malware authors (followers 2-29 / repos 7-41 vs. 0-1 / 1-4). Display-only —
+// never used to filter or reject, only to flag a candidate for closer scrutiny.
+export function isThinAuthor(e: Entry): boolean {
+  return (
+    e.authorFollowers !== null &&
+    e.authorPublicRepos !== null &&
+    e.authorFollowers <= 1 &&
+    e.authorPublicRepos <= 5
+  );
 }
 
 export function listNew(db: DatabaseSync): Entry[] {

@@ -6,9 +6,15 @@ import { fileURLToPath } from "node:url";
 import {
   openDb, profileOf, htmlUrl, cloneUrl, insertNew, listNew, saveEvaluation,
   recordFailure, reviewQueue, setStarred, setFollowed, markReviewed, stats,
+  setAuthorMeta, isThinAuthor,
 } from "../src/lib/db.ts";
+import type { RepoMeta } from "../src/lib/db.ts";
+import type { Entry } from "../src/lib/types.ts";
 
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+
+// Placeholder repo metadata for tests that don't care about its values.
+const noMeta: RepoMeta = { stars: 0, forks: 0, pushedAt: "", license: null, language: null };
 
 function memDb() {
   return openDb(":memory:");
@@ -22,8 +28,8 @@ test("derives profile and urls from the repo key", () => {
 
 test("insertNew is idempotent by primary key", () => {
   const db = memDb();
-  assert.equal(insertNew(db, "a/one", "User", "topic:mcp"), true);
-  assert.equal(insertNew(db, "a/one", "User", "topic:rag"), false);
+  assert.equal(insertNew(db, "a/one", "User", "topic:mcp", noMeta), true);
+  assert.equal(insertNew(db, "a/one", "User", "topic:rag", noMeta), false);
   const rows = listNew(db);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].query, "topic:mcp");
@@ -33,7 +39,7 @@ test("insertNew is idempotent by primary key", () => {
 
 test("saveEvaluation moves new -> evaluated", () => {
   const db = memDb();
-  insertNew(db, "a/one", "User", "q");
+  insertNew(db, "a/one", "User", "q", noMeta);
   saveEvaluation(db, "a/one", {
     idea: 8.2, skill: 7.5, interest: 8, interestReason: "matches the profile",
     description: "A tiny ORM.", securityFlag: false, securityReason: "",
@@ -49,7 +55,7 @@ test("saveEvaluation moves new -> evaluated", () => {
 
 test("recordFailure keeps status new until third failure", () => {
   const db = memDb();
-  insertNew(db, "a/one", "User", "q");
+  insertNew(db, "a/one", "User", "q", noMeta);
   recordFailure(db, "a/one", { terminal: false });
   recordFailure(db, "a/one", { terminal: false });
   assert.equal(listNew(db).length, 1);
@@ -60,7 +66,7 @@ test("recordFailure keeps status new until third failure", () => {
 
 test("recordFailure terminal fails immediately", () => {
   const db = memDb();
-  insertNew(db, "a/gone", "User", "q");
+  insertNew(db, "a/gone", "User", "q", noMeta);
   recordFailure(db, "a/gone", { terminal: true });
   assert.equal(stats(db, 6, 4).failed, 1);
 });
@@ -71,7 +77,7 @@ test("reviewQueue gates on interest+skill and sorts security-flagged last", () =
     ["a/low", 3, 3, 2, false], ["a/mid", 7, 6, 7, false],
     ["a/top", 9, 9, 9, false], ["a/bad", 9.5, 9.5, 1, true],
   ] as const) {
-    insertNew(db, repo, "User", "q");
+    insertNew(db, repo, "User", "q", noMeta);
     saveEvaluation(db, repo, {
       idea, skill, interest, interestReason: flag ? "" : "fits",
       description: "d", securityFlag: flag, securityReason: flag ? "steals keys" : "",
@@ -84,12 +90,12 @@ test("reviewQueue gates on interest+skill and sorts security-flagged last", () =
 
 test("reviewQueue always surfaces flagged repos even below the interest gate, sorted last", () => {
   const db = memDb();
-  insertNew(db, "a/flagged-low", "User", "q");
+  insertNew(db, "a/flagged-low", "User", "q", noMeta);
   saveEvaluation(db, "a/flagged-low", {
     idea: 4, skill: 4, interest: 1, interestReason: "",
     description: "d", securityFlag: true, securityReason: "steals keys",
   });
-  insertNew(db, "a/clean-low", "User", "q");
+  insertNew(db, "a/clean-low", "User", "q", noMeta);
   saveEvaluation(db, "a/clean-low", {
     idea: 4, skill: 4, interest: 2, interestReason: "meh",
     description: "d", securityFlag: false, securityReason: "",
@@ -103,12 +109,12 @@ test("reviewQueue always surfaces flagged repos even below the interest gate, so
 
 test("reviewQueue: flagged entry below the interest gate still appears, sorted last", () => {
   const db = memDb();
-  insertNew(db, "a/clean-good", "User", "q");
+  insertNew(db, "a/clean-good", "User", "q", noMeta);
   saveEvaluation(db, "a/clean-good", {
     idea: 8, skill: 8, interest: 9, interestReason: "great fit",
     description: "d", securityFlag: false, securityReason: "",
   });
-  insertNew(db, "a/flagged-poor-fit", "User", "q");
+  insertNew(db, "a/flagged-poor-fit", "User", "q", noMeta);
   saveEvaluation(db, "a/flagged-poor-fit", {
     idea: 2, skill: 2, interest: 1, interestReason: "",
     description: "d", securityFlag: true, securityReason: "phones home",
@@ -120,7 +126,7 @@ test("reviewQueue: flagged entry below the interest gate still appears, sorted l
 
 test("reviewQueue excludes a clean entry with high interest but skill below minSkill", () => {
   const db = memDb();
-  insertNew(db, "a/exciting-but-sloppy", "User", "q");
+  insertNew(db, "a/exciting-but-sloppy", "User", "q", noMeta);
   saveEvaluation(db, "a/exciting-but-sloppy", {
     idea: 9, skill: 2, interest: 9, interestReason: "exactly the profile",
     description: "d", securityFlag: false, securityReason: "",
@@ -131,7 +137,7 @@ test("reviewQueue excludes a clean entry with high interest but skill below minS
 
 test("review actions: flags persist without status change, markReviewed closes", () => {
   const db = memDb();
-  insertNew(db, "a/one", "User", "q");
+  insertNew(db, "a/one", "User", "q", noMeta);
   saveEvaluation(db, "a/one", {
     idea: 8, skill: 8, interest: 8, interestReason: "fits",
     description: "d", securityFlag: false, securityReason: "",
@@ -149,12 +155,12 @@ test("review actions: flags persist without status change, markReviewed closes",
 
 test("stats counts below-gate evaluated rows, including NULL interest", () => {
   const db = memDb();
-  insertNew(db, "a/low", "User", "q");
+  insertNew(db, "a/low", "User", "q", noMeta);
   saveEvaluation(db, "a/low", {
     idea: 3, skill: 3, interest: 2, interestReason: "",
     description: "d", securityFlag: false, securityReason: "",
   });
-  insertNew(db, "a/new", "User", "q");
+  insertNew(db, "a/new", "User", "q", noMeta);
   const s = stats(db, 6, 4);
   assert.equal(s.total, 2);
   assert.equal(s.new, 1);
@@ -162,7 +168,7 @@ test("stats counts below-gate evaluated rows, including NULL interest", () => {
   assert.equal(s.belowThreshold, 1);
 });
 
-test("migrate: opening a database created with the pre-interest schema adds the new columns", () => {
+test("migrate: opening a database created with the pre-interest/author-signal schema adds the new columns", () => {
   const tmpRoot = mkdtempSync("/tmp/repo-scout-test-");
   const dbPath = resolve(tmpRoot, "legacy.sqlite");
   try {
@@ -193,8 +199,14 @@ test("migrate: opening a database created with the pre-interest schema adds the 
       .map(c => c.name);
     assert.ok(columns.includes("interest"));
     assert.ok(columns.includes("interest_reason"));
+    for (const col of [
+      "author_followers", "author_public_repos", "author_created_at",
+      "repo_stars", "repo_forks", "repo_pushed_at", "repo_license", "repo_language",
+    ]) {
+      assert.ok(columns.includes(col), `missing column ${col}`);
+    }
 
-    insertNew(db, "a/migrated", "User", "q");
+    insertNew(db, "a/migrated", "User", "q", noMeta);
     saveEvaluation(db, "a/migrated", {
       idea: 6, skill: 6, interest: 7, interestReason: "post-migration insert",
       description: "d", securityFlag: false, securityReason: "",
@@ -214,7 +226,7 @@ test("openDb creates nested directories for absolute paths", (t) => {
 
   try {
     const db = openDb(dbPath);
-    insertNew(db, "test/repo", "User", "q");
+    insertNew(db, "test/repo", "User", "q", noMeta);
     const rows = listNew(db);
     assert.equal(rows.length, 1);
     assert.equal(rows[0].repo, "test/repo");
@@ -231,7 +243,7 @@ test("openDb resolves relative paths against project root", (t) => {
   try {
     // First open: insert data
     const db1 = openDb(dbPath);
-    insertNew(db1, "proj/root", "Organization", "q");
+    insertNew(db1, "proj/root", "Organization", "q", noMeta);
     const rows1 = listNew(db1);
     assert.equal(rows1.length, 1);
     assert.equal(rows1[0].repo, "proj/root");
@@ -245,4 +257,53 @@ test("openDb resolves relative paths against project root", (t) => {
   } finally {
     rmSync(resolve(PROJECT_ROOT, testDir), { recursive: true, force: true });
   }
+});
+
+test("insertNew stores repo metadata from the search result", () => {
+  const db = memDb();
+  insertNew(db, "a/one", "User", "q", {
+    stars: 12, forks: 3, pushedAt: "2026-08-05T10:00:00Z", license: "MIT", language: "TypeScript",
+  });
+  const rows = listNew(db);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].repoStars, 12);
+  assert.equal(rows[0].repoForks, 3);
+  assert.equal(rows[0].repoPushedAt, "2026-08-05T10:00:00Z");
+  assert.equal(rows[0].repoLicense, "MIT");
+  assert.equal(rows[0].repoLanguage, "TypeScript");
+});
+
+test("insertNew leaves author fields NULL until setAuthorMeta is called; setAuthorMeta round-trips", () => {
+  const db = memDb();
+  insertNew(db, "a/one", "User", "q", noMeta);
+  const before = listNew(db)[0];
+  assert.equal(before.authorFollowers, null);
+  assert.equal(before.authorPublicRepos, null);
+  assert.equal(before.authorCreatedAt, null);
+
+  setAuthorMeta(db, "a/one", { followers: 15, publicRepos: 22, createdAt: "2019-03-01T00:00:00Z" });
+  const after = listNew(db)[0];
+  assert.equal(after.authorFollowers, 15);
+  assert.equal(after.authorPublicRepos, 22);
+  assert.equal(after.authorCreatedAt, "2019-03-01T00:00:00Z");
+});
+
+test("isThinAuthor: boundary cases", () => {
+  const base: Entry = {
+    repo: "a/one", ownerType: "User", query: "q", foundAt: "", evaluatedAt: null,
+    idea: null, skill: null, interest: null, interestReason: "", description: null,
+    securityFlag: false, securityReason: "", status: "new", failCount: 0,
+    starred: false, followed: false, reviewedAt: null,
+    authorFollowers: null, authorPublicRepos: null, authorCreatedAt: null,
+    repoStars: null, repoForks: null, repoPushedAt: null, repoLicense: null, repoLanguage: null,
+  };
+
+  // At the threshold (<=1 follower, <=5 repos): thin.
+  assert.equal(isThinAuthor({ ...base, authorFollowers: 1, authorPublicRepos: 5 }), true);
+  // One field over threshold: not thin.
+  assert.equal(isThinAuthor({ ...base, authorFollowers: 2, authorPublicRepos: 5 }), false);
+  assert.equal(isThinAuthor({ ...base, authorFollowers: 1, authorPublicRepos: 6 }), false);
+  // Missing author data: never flagged (display-only, no data to judge).
+  assert.equal(isThinAuthor({ ...base, authorFollowers: null, authorPublicRepos: 3 }), false);
+  assert.equal(isThinAuthor({ ...base, authorFollowers: 0, authorPublicRepos: null }), false);
 });

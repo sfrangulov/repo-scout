@@ -4,8 +4,9 @@ import { join } from "node:path";
 import config from "../config.ts";
 import {
   openDb, insertNew, listNew, saveEvaluation, recordFailure, stats,
+  setAuthorMeta, profileOf,
 } from "./lib/db.ts";
-import { searchRepos, ensureGhReady } from "./lib/gh.ts";
+import { searchRepos, fetchAuthor, ensureGhReady } from "./lib/gh.ts";
 import { cloneShallow } from "./lib/clone.ts";
 import { buildDigest } from "./lib/digest.ts";
 import { evaluateRepo } from "./lib/evaluate.ts";
@@ -35,9 +36,18 @@ function main(): void {
     let taken = 0;
     for (const item of items) {
       if (taken >= config.perQuery) break;
-      if (insertNew(db, item.repo, item.ownerType, query)) {
-        taken += 1;
-        added += 1;
+      const isNew = insertNew(db, item.repo, item.ownerType, query, {
+        stars: item.stars, forks: item.forks, pushedAt: item.pushedAt,
+        license: item.license, language: item.language,
+      });
+      if (!isNew) continue;
+      taken += 1;
+      added += 1;
+      const author = fetchAuthor(run, profileOf(item.repo));
+      if (author) {
+        setAuthorMeta(db, item.repo, author);
+      } else {
+        console.warn(`${item.repo}: author lookup failed — leaving author fields NULL`);
       }
     }
     console.log(`query "${query}": +${taken} new`);

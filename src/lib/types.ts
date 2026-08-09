@@ -35,4 +35,12 @@ export interface Entry {
   starred: boolean;
   followed: boolean;
   reviewedAt: string | null;
+  authorFollowers: number | null;
+  authorPublicRepos: number | null;
+  authorCreatedAt: string | null;
+  repoStars: number | null;
+  repoForks: number | null;
+  repoPushedAt: string | null;
+  repoLicense: string | null;
+  repoLanguage: string | null;
 }

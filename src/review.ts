@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import config from "../config.ts";
 import {
   openDb, reviewQueue, setStarred, setFollowed, markReviewed, stats,
-  profileOf, htmlUrl,
+  profileOf, htmlUrl, isThinAuthor,
 } from "./lib/db.ts";
 import { starRepo, followUser, ensureGhReady } from "./lib/gh.ts";
 import { run } from "./lib/run.ts";
@@ -22,6 +22,24 @@ function readKey(): Promise<string> {
   });
 }
 
+// Context line summarizing repo + author metadata; parts with NULL data are
+// omitted rather than shown as placeholders.
+function contextLine(entry: Entry): string {
+  const parts: string[] = [];
+  if (entry.repoStars !== null) parts.push(`★${entry.repoStars}`);
+  if (entry.repoForks !== null) parts.push(`${entry.repoForks} forks`);
+  if (entry.repoLicense !== null) parts.push(entry.repoLicense);
+  if (entry.repoLanguage !== null) parts.push(entry.repoLanguage);
+  if (entry.repoPushedAt !== null) parts.push(`pushed ${entry.repoPushedAt.slice(0, 10)}`);
+
+  const authorParts: string[] = [];
+  if (entry.authorFollowers !== null) authorParts.push(`${entry.authorFollowers} followers`);
+  if (entry.authorPublicRepos !== null) authorParts.push(`${entry.authorPublicRepos} repos`);
+  if (authorParts.length > 0) parts.push(`author: ${authorParts.join(" / ")}`);
+
+  return parts.join(" · ");
+}
+
 function show(entry: Entry, index: number, total: number): void {
   console.log("");
   console.log(
@@ -35,7 +53,16 @@ function show(entry: Entry, index: number, total: number): void {
   if (entry.securityFlag) {
     console.log(`  SECURITY WARNING: ${entry.securityReason}`);
   }
+  if (isThinAuthor(entry)) {
+    console.log(
+      "  THIN AUTHOR: <=1 follower, <=5 repos — typical of junk/malware accounts in past scans; scrutinize before starring",
+    );
+  }
   console.log(`  ${htmlUrl(entry.repo)}`);
+  const ctx = contextLine(entry);
+  if (ctx) {
+    console.log(`  ${ctx}`);
+  }
   const canFollow = entry.ownerType === "User";
   console.log(canFollow
     ? "\n  [s]tar  [f]ollow  [b]oth  [o]pen  [n]ext  [q]uit"
