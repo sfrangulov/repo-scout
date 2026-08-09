@@ -69,20 +69,29 @@ export default {
     "topic:mcp",
     "topic:claude-code",
     '"claude code" in:name,description',
-    "topic:llm-agents",
-    "topic:ai-agents language:typescript",
+    "topic:claude-code-plugin",
+    "topic:model-context-protocol",
     "topic:rag language:typescript",
+    "topic:agent-observability",
+    "topic:tmux topic:ai",
   ],
-  maxStars: 200,        // добавляется к каждому запросу как stars:<N
-  perQuery: 10,         // максимум новых кандидатов с одного запроса за scan
-  reviewThreshold: 12,  // минимальный idea+skill для показа в review
-  model: "haiku",       // передаётся в claude -p --model
+  minStars: 2,             // добавляется к каждому запросу как stars:<N>..<M>, отсекает спам-репо
+  maxStars: 200,
+  perQuery: 10,             // максимум новых кандидатов с одного запроса за scan
+  interestThreshold: 6,     // минимальный interest (личная ось) для показа в review
+  minSkill: 4,              // минимальный skill для показа в review
+  model: "haiku",           // передаётся в claude -p --model
   dbPath: "data/scout.sqlite",
 } satisfies Config;
 ```
 
-Стартовые запросы — интересы из research-репо (MCP, Claude Code тулинг,
-LLM-агенты, RAG); список правится свободно.
+Стартовые запросы — интересы из research-репо (MCP, Claude Code тулинг и
+плагины, MCP-протокол, RAG, agent observability, tmux+AI); список правится
+свободно.
+
+`minStars` — нижний пол по звёздам в самом поисковом запросе (не постфильтр):
+отсекает депозитории-спам и пустые форки до того, как они попадут в БД и
+будут стоить оценки моделью.
 
 Лимиты дайджеста — константы в `digest.ts` (не конфиг): `MAX_FILES = 20`,
 `MAX_LINES_PER_FILE = 80`, `MAX_CHARS_PER_FILE = 4_000`,
@@ -106,6 +115,8 @@ CREATE TABLE IF NOT EXISTS entries (
   evaluated_at    TEXT,
   idea            REAL,                  -- 1.0–10.0
   skill           REAL,                  -- 1.0–10.0
+  interest        REAL,                  -- 1.0–10.0, личная ось (см. evaluate.ts)
+  interest_reason TEXT NOT NULL DEFAULT '', -- одно предложение — почему такой interest
   description     TEXT,                  -- одно предложение от модели
   security_flag   INTEGER NOT NULL DEFAULT 0,
   security_reason TEXT NOT NULL DEFAULT '',
@@ -117,26 +128,34 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 ```
 
+`interest`/`interest_reason` появились после первой версии; `openDb` держит
+guarded-миграцию (`PRAGMA table_info` → `ALTER TABLE ... ADD COLUMN`) для
+уже существующих файлов БД — `CREATE TABLE IF NOT EXISTS` их не добавит.
+
 Жизненный цикл строки: `new` (найден) → `evaluated` (оценён) → `reviewed`
 (человек решил, `reviewed_at` заполнен). Ветка `failed` — терминальная для
 стабильно неоценимых (см. «Обработка ошибок»). Оценённые ниже порога
-остаются `evaluated` — история, доступны через `review --min-score`.
+остаются `evaluated` — история, доступны через `review --min-interest`.
 
 ## Команда `scan`
 
 `pnpm scan` (= `node --no-warnings src/scan.ts`):
 
 1. По каждому запросу из `config.queries`:
-   `gh api -X GET /search/repositories -f q="${query} stars:<${maxStars}"
+   `gh api -X GET /search/repositories
+   -f q="${query} stars:${minStars}..${maxStars} fork:false archived:false"
    -f sort=updated -f order=desc -F per_page=100`, одна страница.
    `-X GET` обязателен: с `-f`-параметрами gh иначе молча переключается на
-   POST, а `POST /search/repositories` не существует → 404.
+   POST, а `POST /search/repositories` не существует → 404. Пол по звёздам
+   (`minStars`) и фильтры `fork:false archived:false` отсекают форки,
+   архивные и совсем пустые репозитории уже на уровне запроса — до того,
+   как они попадут в БД и будут стоить оценки моделью.
    Из результатов берутся первые `perQuery` репозиториев, которых ещё нет
    в БД (проверка по PK), вставка со статусом `new` + `owner_type` из
    `owner.type`. Лимит GitHub Search — 30 запросов/мин с токеном;
-   6 запросов по одной странице — с запасом.
+   8 запросов по одной странице — с запасом.
 2. Для каждой строки `status='new'` (с построчным прогрессом
-   `[i/N] owner/repo → idea X skill Y` либо причиной пропуска):
+   `[i/N] owner/repo → idea X skill Y interest Z` либо причиной пропуска):
    shallow clone (`git clone --depth 1 --quiet`, таймаут 180 с) во
    временный каталог внутри `os.tmpdir()`, каталог удаляется в `finally`.
 3. Дайджест: плоский список путей (фильтр по расширениям, игнор-каталоги,
@@ -147,9 +166,19 @@ CREATE TABLE IF NOT EXISTS entries (
    пропускается: warning + фейл-ветка, `claude` с пустым вводом не зовётся.
 4. Оценка: один вызов `claude -p <prompt> --model <model>` (таймаут 180 с).
    Промпт — инструкция + дайджест, требует строгий JSON:
-   `{idea, skill, description, security_flag, security_reason}`.
-   Шкала с якорями (1 = trivial, 5 = ordinary, 9 = strong) и
-   malicious-скрин из followme (харвестинг секретов, exfiltration,
+   `{idea, skill, interest, interest_reason, description, security_flag, security_reason}`.
+   Шкала с якорями (1 = trivial, 5 = ordinary, 9 = strong), калибровка
+   против кластеризации в 6-8 (напоминание, что digest — уже
+   предфильтрованная подборка, а не случайная выборка GitHub, поэтому
+   бо́льшая часть должна всё равно ложиться в 4-6) и запрет поднимать
+   оценку за манифест/заявленный бенчмарк без видимого в дайджесте кода.
+   `interest` оценивает соответствие личному профилю интересов пользователя
+   (harness-тулинг для coding-агентов, agent observability, verified
+   knowledge/memory, local-first инструменты — подробный профиль интересов
+   в `evaluate.ts`, HIGH/MEDIUM/LOW с явными примерами и исключением для
+   «скучной категории» с реальным механизмом). `idea`/`skill` остаются
+   универсальной инженерной оценкой, независимой от личных интересов.
+   Malicious-скрин из followme (харвестинг секретов, exfiltration,
    обфусцированный exec, C2, тайпсквоттинг; «опрятность кода не снижает
    подозрение»). Флагнутые репозитории сохраняют реальные оценки модели —
    `security_flag` не занижает `idea`/`skill`. Ответ парсится: первый
@@ -160,7 +189,10 @@ CREATE TABLE IF NOT EXISTS entries (
    при `fail_count >= 3` — `status='failed'`; git-ошибка
    «repository not found» (репо удалён/приватизирован) → `failed` сразу.
    Иначе строка остаётся `new` и повторится в следующем scan.
-6. Сводка: added / evaluated / failed / pending-review.
+6. Сводка: added / evaluated / failed / pending-review, плюс гистограмма
+   `interest` только по репозиториям, оценённым за этот прогон
+   (`1-4: N  5-7: M  8-10: K`) — сигнал, не сместилась ли модель в
+   кластеризацию до следующего ручного ревью промпта.
 
 Замечание о «свежести»: `sort=updated` даёт недавно активные репозитории
 (в том числе старые с недавним пушем) — это осознанный выбор, фильтра по
@@ -168,28 +200,34 @@ CREATE TABLE IF NOT EXISTS entries (
 
 ## Команда `review`
 
-`pnpm review` (= `node --no-warnings src/review.ts [--min-score N]`):
+`pnpm review` (= `node --no-warnings src/review.ts [--min-interest N]`):
 
-Выборка: `status='evaluated' AND (idea+skill >= threshold OR security_flag=1)` —
-флагнутые репозитории попадают в очередь всегда, независимо от порога.
-Сортировка — сначала без security-флага, внутри по убыванию суммы; флагнутые
-идут последними, с предупреждением. Флаг `--min-score` перекрывает
-`config.reviewThreshold`.
+Выборка: `status='evaluated' AND (security_flag=1 OR (interest >= minInterest
+AND skill >= minSkill))` — личный `interest` первичен, `idea` в отбор не
+участвует (входит только в сортировку как второй тай-брейк). Флагнутые
+репозитории попадают в очередь всегда, независимо от порога. Сортировка —
+сначала без security-флага, внутри по убыванию `interest`, при равенстве —
+по убыванию `idea+skill`; флагнутые идут последними, с предупреждением.
+Флаг `--min-interest` перекрывает `config.interestThreshold`; порог по
+skill (`config.minSkill`) фиксирован конфигом, отдельного флага под него нет.
 
 Пустая очередь — не ошибка: печатается сводка «очередь пуста: N оценено
-ниже порога (попробуй --min-score), M ждут оценки (запусти scan)»,
+ниже порога (попробуй --min-interest), M ждут оценки (запусти scan)»,
 выход с кодом 0.
 
 Экран кандидата:
 
 ```
-[3/7] tinyorm/pico-db   idea 8.2  skill 7.5  sum 15.7   (query: topic:llm-agents)
+[3/7] tinyorm/pico-db   interest 8.7  idea 8.2  skill 7.5   (query: topic:agent-observability)
   «Однофайловый ORM на dataclasses, ноль зависимостей»
+  why: local-first SQLite CLI с committed embeddings, без SaaS-зависимости
   https://github.com/tinyorm/pico-db
 
   [s]tar  [f]ollow  [b]oth  [o]pen  [n]ext  [q]uit
 ```
 
+Строка `why:` печатается только когда `interest_reason` непусто — одно
+предложение модели про конкретный механизм, который сыграл на interest.
 Кандидат с `security_flag` дополнительно показывает строку
 `⚠ SECURITY: <reason>` — решение всё равно за человеком.
 Для `owner_type = 'Organization'` клавиши `[f]`/`[b]` не предлагаются

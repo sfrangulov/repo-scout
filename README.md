@@ -23,7 +23,7 @@ pnpm install
 # edit config.ts: queries, thresholds, model
 pnpm scan            # search GitHub, clone, grade with claude
 pnpm review          # interactive: [s]tar [f]ollow [b]oth [o]pen [n]ext [q]uit
-pnpm review --min-score 10
+pnpm review --min-interest 8
 ```
 
 Following a user needs a one-time scope grant:
@@ -32,18 +32,25 @@ Following a user needs a one-time scope grant:
 ## How it works
 
 `scan`: for each query in `config.ts` → GitHub search (`sort=updated`,
-`stars:<maxStars`) → shallow clone → digest (file list + snippets, README
-first) → one `claude -p` call returns strict JSON
-`{idea, skill, description, security_flag, security_reason}` → SQLite
-(`data/scout.sqlite`, single `entries` table).
+`stars:minStars..maxStars fork:false archived:false`) → shallow clone →
+digest (file list + snippets, README first) → one `claude -p` call returns
+strict JSON `{idea, skill, interest, interest_reason, description,
+security_flag, security_reason}` → SQLite (`data/scout.sqlite`, single
+`entries` table).
+
+`idea`/`skill` are generic engineering grades; `interest` is graded against
+a personal interest profile baked into the prompt (`src/lib/evaluate.ts`) —
+it's the primary ranking signal for review, since idea+skill barely
+correlates with what actually gets starred.
 
 Repos the model flags as malicious always enter the review queue,
 regardless of score, shown last with a warning — the human still decides.
 Repos that fail three times (or vanish) are parked as `failed`.
 
-`review`: walks evaluated entries with `idea + skill >= reviewThreshold`
-(plus every flagged repo, regardless of score), best first. Every action
-calls `gh api` directly and is idempotent.
+`review`: walks evaluated entries with `interest >= interestThreshold AND
+skill >= minSkill` (plus every flagged repo, regardless of score), sorted
+by `interest` first, `idea + skill` as a tiebreaker. Every action calls
+`gh api` directly and is idempotent.
 
 ## Security notes
 
