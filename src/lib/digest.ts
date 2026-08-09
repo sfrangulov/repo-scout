@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, lstatSync } from "node:fs";
 import { join, relative } from "node:path";
 
 export const MAX_FILES = 20;
@@ -28,10 +28,11 @@ function walk(dir: string, root: string, acc: string[]): void {
     const abs = join(dir, name);
     let st;
     try {
-      st = statSync(abs);
+      st = lstatSync(abs);
     } catch {
       continue;
     }
+    if (st.isSymbolicLink()) continue; // never follow symlinks: exfiltration + loop risk
     if (st.isDirectory()) {
       if (!IGNORE_DIRS.has(name)) walk(abs, root, acc);
       continue;

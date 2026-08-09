@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildDigest, MAX_FILES } from "../src/lib/digest.ts";
@@ -59,4 +59,26 @@ test("returns empty string when nothing usable", t => {
   const root = fixture({ "photo.jpg": "x" });
   t.after(() => rmSync(root, { recursive: true, force: true }));
   assert.equal(buildDigest(root), "");
+});
+
+test("skips file symlinks: no exfiltration of the link target", t => {
+  const outsideDir = mkdtempSync(join(tmpdir(), "scout-outside-"));
+  const secretPath = join(outsideDir, "id_rsa");
+  writeFileSync(secretPath, "SUPER-SECRET-KEY-CONTENT\n");
+  const root = fixture({ "ok.ts": "const a = 1;\n" });
+  symlinkSync(secretPath, join(root, "README.md"));
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+  const d = buildDigest(root);
+  assert.doesNotMatch(d, /SUPER-SECRET-KEY-CONTENT/);
+  assert.doesNotMatch(d, /README\.md/);
+});
+
+test("skips directory symlinks and tolerates a self-referential loop", t => {
+  const root = fixture({ "ok.ts": "const a = 1;\n" });
+  symlinkSync(".", join(root, "loop"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  assert.doesNotThrow(() => buildDigest(root));
 });
