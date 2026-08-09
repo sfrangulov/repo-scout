@@ -1,0 +1,67 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { parseEvaluation, buildPrompt, evaluateRepo } from "../src/lib/evaluate.ts";
+import type { Runner } from "../src/lib/run.ts";
+
+test("parses a clean JSON object", () => {
+  const e = parseEvaluation(
+    '{"idea": 8.5, "skill": 7, "description": "A tool.", "security_flag": false, "security_reason": ""}',
+  );
+  assert.deepEqual(e, {
+    idea: 8.5, skill: 7, description: "A tool.", securityFlag: false, securityReason: "",
+  });
+});
+
+test("extracts JSON surrounded by prose and clamps scores into [1,10]", () => {
+  const e = parseEvaluation(
+    'Sure! Here is the JSON:\n{"idea": 42, "skill": -3, "description": "d"}\nHope this helps.',
+  );
+  assert.equal(e.idea, 10);
+  assert.equal(e.skill, 1);
+});
+
+test("coerces loose security_flag values and defaults the reason", () => {
+  const flagged = parseEvaluation('{"idea": 1, "skill": 1, "description": "d", "security_flag": "true"}');
+  assert.equal(flagged.securityFlag, true);
+  assert.equal(flagged.securityReason, "flagged as malicious (no reason given)");
+  const clean = parseEvaluation('{"idea": 5, "skill": 5, "description": "d", "security_flag": 0}');
+  assert.equal(clean.securityFlag, false);
+});
+
+test("non-numeric scores fall back to 1.0", () => {
+  const e = parseEvaluation('{"idea": "high", "skill": null, "description": "d"}');
+  assert.equal(e.idea, 1);
+  assert.equal(e.skill, 1);
+});
+
+test("throws when there is no JSON object", () => {
+  assert.throws(() => parseEvaluation("I cannot help with that."), /no JSON object/);
+});
+
+test("buildPrompt embeds repo name and digest", () => {
+  const p = buildPrompt("alice/tool", "FILES:\n  a.ts");
+  assert.match(p, /alice\/tool/);
+  assert.match(p, /FILES:/);
+  assert.match(p, /STRICT JSON/);
+});
+
+test("evaluateRepo pipes prompt via stdin and parses stdout", () => {
+  const calls: Array<{ cmd: string; args: string[]; input?: string }> = [];
+  const fake: Runner = (cmd, args, opts) => {
+    calls.push({ cmd, args, input: opts?.input });
+    return {
+      status: 0,
+      stdout: '{"idea": 6, "skill": 6, "description": "ok", "security_flag": false, "security_reason": ""}',
+      stderr: "",
+    };
+  };
+  const e = evaluateRepo(fake, "haiku", "alice/tool", "FILES:\n  a.ts");
+  assert.equal(e.idea, 6);
+  assert.deepEqual(calls[0].args, ["-p", "--model", "haiku"]);
+  assert.match(calls[0].input ?? "", /alice\/tool/);
+});
+
+test("evaluateRepo throws on non-zero exit", () => {
+  const fake: Runner = () => ({ status: 1, stdout: "", stderr: "boom" });
+  assert.throws(() => evaluateRepo(fake, "haiku", "a/b", "FILES:"), /claude failed/);
+});
