@@ -17,19 +17,19 @@ test("searchRepos uses explicit GET and parses items", () => {
     seen = args;
     return { status: 0, stdout: searchPayload, stderr: "" };
   };
-  const items = searchRepos(fake, "topic:mcp", 200);
+  const items = searchRepos(fake, "topic:mcp", 2, 200);
   assert.deepEqual(items, [
     { repo: "alice/tool", ownerType: "User" },
     { repo: "acme/lib", ownerType: "Organization" },
   ]);
   assert.ok(seen.includes("-X"));
   assert.ok(seen.includes("GET"));
-  assert.ok(seen.some(a => a.includes("topic:mcp stars:<200")));
+  assert.ok(seen.some(a => a.includes("stars:2..200 fork:false archived:false")));
 });
 
 test("searchRepos throws on gh failure", () => {
   const fake: Runner = () => ({ status: 1, stdout: "", stderr: "rate limited" });
-  assert.throws(() => searchRepos(fake, "q", 200), /rate limited/);
+  assert.throws(() => searchRepos(fake, "q", 2, 200), /rate limited/);
 });
 
 test("starRepo interpolates the repo path (no gh placeholders)", () => {

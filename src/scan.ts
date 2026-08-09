@@ -27,7 +27,7 @@ function main(): void {
   for (const query of config.queries) {
     let items;
     try {
-      items = searchRepos(run, query, config.maxStars);
+      items = searchRepos(run, query, config.minStars, config.maxStars);
     } catch (err) {
       console.warn(`search failed for "${query}": ${(err as Error).message}`);
       continue;
@@ -47,6 +47,7 @@ function main(): void {
   console.log(`evaluating ${pending.length} repos with model ${config.model}`);
   let evaluated = 0;
   let failed = 0;
+  const runInterests: number[] = [];
   for (const [i, entry] of pending.entries()) {
     const label = `[${i + 1}/${pending.length}] ${entry.repo}`;
     const target = mkdtempSync(join(tmpdir(), "repo-scout-"));
@@ -68,10 +69,11 @@ function main(): void {
       const e = evaluateRepo(run, config.model, entry.repo, digest);
       saveEvaluation(db, entry.repo, e);
       evaluated += 1;
+      runInterests.push(e.interest);
       const flag = e.securityFlag ? `  SECURITY: ${e.securityReason}` : "";
       console.log(
         `${label} idea ${e.idea.toFixed(1)} skill ${e.skill.toFixed(1)}` +
-        ` sum ${(e.idea + e.skill).toFixed(1)} — ${e.description}${flag}`,
+        ` interest ${e.interest.toFixed(1)} — ${e.description}${flag}`,
       );
     } catch (err) {
       console.warn(`${label} evaluation failed: ${(err as Error).message}`);
@@ -82,7 +84,12 @@ function main(): void {
     }
   }
 
-  const s = stats(db, config.reviewThreshold);
+  const low = runInterests.filter(v => v >= 1 && v <= 4).length;
+  const mid = runInterests.filter(v => v >= 5 && v <= 7).length;
+  const high = runInterests.filter(v => v >= 8 && v <= 10).length;
+  console.log(`interest distribution: 1-4: ${low}  5-7: ${mid}  8-10: ${high}`);
+
+  const s = stats(db, config.interestThreshold, config.minSkill);
   console.log(
     `done: +${added} found, ${evaluated} evaluated, ${failed} failed this run; ` +
     `queue: ${s.evaluated - s.belowThreshold} above threshold, ` +

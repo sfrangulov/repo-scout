@@ -1,11 +1,14 @@
 export interface Config {
-  /** GitHub search queries; "stars:<maxStars>" is appended to each. */
+  /** GitHub search queries; "stars:<minStars>..<maxStars>" is appended to each. */
   queries: string[];
+  minStars: number;
   maxStars: number;
   /** Max new candidates taken from one query per scan run. */
   perQuery: number;
-  /** Minimum idea+skill sum to show in review. */
-  reviewThreshold: number;
+  /** Minimum personal-interest score to show in review. */
+  interestThreshold: number;
+  /** Minimum skill score to show in review. */
+  minSkill: number;
   /** Model passed to `claude -p --model`. */
   model: string;
   /** SQLite path, relative to the project root. */
@@ -22,6 +25,8 @@ export interface Entry {
   evaluatedAt: string | null;
   idea: number | null;
   skill: number | null;
+  interest: number | null;
+  interestReason: string;
   description: string | null;
   securityFlag: boolean;
   securityReason: string;

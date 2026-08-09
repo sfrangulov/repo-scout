@@ -35,13 +35,15 @@ test("saveEvaluation moves new -> evaluated", () => {
   const db = memDb();
   insertNew(db, "a/one", "User", "q");
   saveEvaluation(db, "a/one", {
-    idea: 8.2, skill: 7.5, description: "A tiny ORM.",
-    securityFlag: false, securityReason: "",
+    idea: 8.2, skill: 7.5, interest: 8, interestReason: "matches the profile",
+    description: "A tiny ORM.", securityFlag: false, securityReason: "",
   });
   assert.equal(listNew(db).length, 0);
-  const q = reviewQueue(db, 12);
+  const q = reviewQueue(db, 6, 4);
   assert.equal(q.length, 1);
   assert.equal(q[0].idea, 8.2);
+  assert.equal(q[0].interest, 8);
+  assert.equal(q[0].interestReason, "matches the profile");
   assert.ok(q[0].evaluatedAt);
 });
 
@@ -53,78 +55,157 @@ test("recordFailure keeps status new until third failure", () => {
   assert.equal(listNew(db).length, 1);
   recordFailure(db, "a/one", { terminal: false });
   assert.equal(listNew(db).length, 0);
-  assert.equal(stats(db, 12).failed, 1);
+  assert.equal(stats(db, 6, 4).failed, 1);
 });
 
 test("recordFailure terminal fails immediately", () => {
   const db = memDb();
   insertNew(db, "a/gone", "User", "q");
   recordFailure(db, "a/gone", { terminal: true });
-  assert.equal(stats(db, 12).failed, 1);
+  assert.equal(stats(db, 6, 4).failed, 1);
 });
 
-test("reviewQueue filters by threshold and sorts security-flagged last", () => {
+test("reviewQueue gates on interest+skill and sorts security-flagged last", () => {
   const db = memDb();
-  for (const [repo, idea, skill, flag] of [
-    ["a/low", 3, 3, false], ["a/mid", 7, 6, false],
-    ["a/top", 9, 9, false], ["a/bad", 9.5, 9.5, true],
+  for (const [repo, idea, skill, interest, flag] of [
+    ["a/low", 3, 3, 2, false], ["a/mid", 7, 6, 7, false],
+    ["a/top", 9, 9, 9, false], ["a/bad", 9.5, 9.5, 1, true],
   ] as const) {
     insertNew(db, repo, "User", "q");
     saveEvaluation(db, repo, {
-      idea, skill, description: "d", securityFlag: flag, securityReason: flag ? "steals keys" : "",
+      idea, skill, interest, interestReason: flag ? "" : "fits",
+      description: "d", securityFlag: flag, securityReason: flag ? "steals keys" : "",
     });
   }
-  const q = reviewQueue(db, 12);
+  const q = reviewQueue(db, 6, 4);
   assert.deepEqual(q.map(e => e.repo), ["a/top", "a/mid", "a/bad"]);
   assert.equal(q[2].securityFlag, true);
 });
 
-test("reviewQueue always surfaces flagged repos even below threshold, sorted last", () => {
+test("reviewQueue always surfaces flagged repos even below the interest gate, sorted last", () => {
   const db = memDb();
   insertNew(db, "a/flagged-low", "User", "q");
   saveEvaluation(db, "a/flagged-low", {
-    idea: 4, skill: 4, description: "d", securityFlag: true, securityReason: "steals keys",
+    idea: 4, skill: 4, interest: 1, interestReason: "",
+    description: "d", securityFlag: true, securityReason: "steals keys",
   });
   insertNew(db, "a/clean-low", "User", "q");
   saveEvaluation(db, "a/clean-low", {
-    idea: 4, skill: 4, description: "d", securityFlag: false, securityReason: "",
+    idea: 4, skill: 4, interest: 2, interestReason: "meh",
+    description: "d", securityFlag: false, securityReason: "",
   });
-  const q = reviewQueue(db, 12);
+  const q = reviewQueue(db, 6, 4);
   assert.deepEqual(q.map(e => e.repo), ["a/flagged-low"]);
   assert.equal(q[0].securityFlag, true);
   assert.equal(q[0].idea, 4);
   assert.equal(q[0].skill, 4);
 });
 
+test("reviewQueue: flagged entry below the interest gate still appears, sorted last", () => {
+  const db = memDb();
+  insertNew(db, "a/clean-good", "User", "q");
+  saveEvaluation(db, "a/clean-good", {
+    idea: 8, skill: 8, interest: 9, interestReason: "great fit",
+    description: "d", securityFlag: false, securityReason: "",
+  });
+  insertNew(db, "a/flagged-poor-fit", "User", "q");
+  saveEvaluation(db, "a/flagged-poor-fit", {
+    idea: 2, skill: 2, interest: 1, interestReason: "",
+    description: "d", securityFlag: true, securityReason: "phones home",
+  });
+  const q = reviewQueue(db, 6, 4);
+  assert.deepEqual(q.map(e => e.repo), ["a/clean-good", "a/flagged-poor-fit"]);
+  assert.equal(q[1].securityFlag, true);
+});
+
+test("reviewQueue excludes a clean entry with high interest but skill below minSkill", () => {
+  const db = memDb();
+  insertNew(db, "a/exciting-but-sloppy", "User", "q");
+  saveEvaluation(db, "a/exciting-but-sloppy", {
+    idea: 9, skill: 2, interest: 9, interestReason: "exactly the profile",
+    description: "d", securityFlag: false, securityReason: "",
+  });
+  const q = reviewQueue(db, 6, 4);
+  assert.deepEqual(q, []);
+});
+
 test("review actions: flags persist without status change, markReviewed closes", () => {
   const db = memDb();
   insertNew(db, "a/one", "User", "q");
   saveEvaluation(db, "a/one", {
-    idea: 8, skill: 8, description: "d", securityFlag: false, securityReason: "",
+    idea: 8, skill: 8, interest: 8, interestReason: "fits",
+    description: "d", securityFlag: false, securityReason: "",
   });
   setStarred(db, "a/one");
-  assert.equal(reviewQueue(db, 12).length, 1); // still in queue after partial action
+  assert.equal(reviewQueue(db, 6, 4).length, 1); // still in queue after partial action
   markReviewed(db, "a/one");
-  const s = stats(db, 12);
+  const s = stats(db, 6, 4);
   assert.equal(s.reviewed, 1);
   assert.equal(s.starred, 1);
-  assert.equal(reviewQueue(db, 12).length, 0);
+  assert.equal(reviewQueue(db, 6, 4).length, 0);
   setFollowed(db, "a/one");
-  assert.equal(stats(db, 12).followed, 1);
+  assert.equal(stats(db, 6, 4).followed, 1);
 });
 
-test("stats counts below-threshold evaluated rows", () => {
+test("stats counts below-gate evaluated rows, including NULL interest", () => {
   const db = memDb();
   insertNew(db, "a/low", "User", "q");
   saveEvaluation(db, "a/low", {
-    idea: 3, skill: 3, description: "d", securityFlag: false, securityReason: "",
+    idea: 3, skill: 3, interest: 2, interestReason: "",
+    description: "d", securityFlag: false, securityReason: "",
   });
   insertNew(db, "a/new", "User", "q");
-  const s = stats(db, 12);
+  const s = stats(db, 6, 4);
   assert.equal(s.total, 2);
   assert.equal(s.new, 1);
   assert.equal(s.evaluated, 1);
   assert.equal(s.belowThreshold, 1);
+});
+
+test("migrate: opening a database created with the pre-interest schema adds the new columns", () => {
+  const tmpRoot = mkdtempSync("/tmp/repo-scout-test-");
+  const dbPath = resolve(tmpRoot, "legacy.sqlite");
+  try {
+    const legacy = openDb(dbPath);
+    legacy.exec("DROP TABLE entries");
+    legacy.exec(`
+      CREATE TABLE entries (
+        repo            TEXT PRIMARY KEY,
+        owner_type      TEXT NOT NULL,
+        query           TEXT NOT NULL,
+        found_at        TEXT NOT NULL,
+        evaluated_at    TEXT,
+        idea            REAL,
+        skill           REAL,
+        description     TEXT,
+        security_flag   INTEGER NOT NULL DEFAULT 0,
+        security_reason TEXT NOT NULL DEFAULT '',
+        status          TEXT NOT NULL DEFAULT 'new',
+        fail_count      INTEGER NOT NULL DEFAULT 0,
+        starred         INTEGER NOT NULL DEFAULT 0,
+        followed        INTEGER NOT NULL DEFAULT 0,
+        reviewed_at     TEXT
+      )`);
+    legacy.close();
+
+    const db = openDb(dbPath);
+    const columns = (db.prepare("PRAGMA table_info(entries)").all() as Array<{ name: string }>)
+      .map(c => c.name);
+    assert.ok(columns.includes("interest"));
+    assert.ok(columns.includes("interest_reason"));
+
+    insertNew(db, "a/migrated", "User", "q");
+    saveEvaluation(db, "a/migrated", {
+      idea: 6, skill: 6, interest: 7, interestReason: "post-migration insert",
+      description: "d", securityFlag: false, securityReason: "",
+    });
+    const q = reviewQueue(db, 6, 4);
+    assert.equal(q.length, 1);
+    assert.equal(q[0].interest, 7);
+    assert.equal(q[0].interestReason, "post-migration insert");
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
 });
 
 test("openDb creates nested directories for absolute paths", (t) => {

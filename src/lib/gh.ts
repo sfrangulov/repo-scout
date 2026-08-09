@@ -14,11 +14,11 @@ export interface ActionResult {
 // -X GET is mandatory: with -f params gh silently switches to POST,
 // and POST /search/repositories does not exist (404).
 export function searchRepos(
-  runner: Runner, query: string, maxStars: number,
+  runner: Runner, query: string, minStars: number, maxStars: number,
 ): SearchItem[] {
   const res = runner("gh", [
     "api", "-X", "GET", "/search/repositories",
-    "-f", `q=${query} stars:<${maxStars}`,
+    "-f", `q=${query} stars:${minStars}..${maxStars} fork:false archived:false`,
     "-f", "sort=updated",
     "-f", "order=desc",
     "-F", "per_page=100",

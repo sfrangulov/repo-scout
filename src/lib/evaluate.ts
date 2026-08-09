@@ -3,6 +3,8 @@ import type { Runner } from "./run.ts";
 export interface Evaluation {
   idea: number;
   skill: number;
+  interest: number;
+  interestReason: string;
   description: string;
   securityFlag: boolean;
   securityReason: string;
@@ -12,10 +14,40 @@ const PROMPT_HEADER = `You are a senior code reviewer. Below is a digest of a Gi
 Return a STRICT JSON object with exactly these fields:
   "idea": float in [1.0, 10.0] grading the novelty and usefulness of the project idea,
   "skill": float in [1.0, 10.0] grading the engineering skill shown in the code,
+  "interest": float in [1.0, 10.0] grading fit to the interest profile below,
+  "interest_reason": one short sentence citing the concrete mechanism that does or does not match the profile,
   "security_flag": true only when the code is MALICIOUS (its purpose is to harm whoever runs it), else false,
   "security_reason": empty string, or one sentence naming the malicious behaviour and where it is,
   "description": one short English sentence summarizing what the repository does.
 Grade anchors: 1 = trivial/junior, 5 = ordinary/middle, 9 = strong/senior.
+CALIBRATION: across a typical batch, most repositories should land 3-6 on each axis; reserve
+8+ for the top decile. Do not cluster scores in 6-8. This digest comes from a pre-filtered
+topical selection, not a random GitHub sample — most of it should STILL score 4-6. Score only
+what the digest evidences in code and structure. An ambitious README, manifesto, or claimed
+benchmark ("outperforms X") without corresponding code visible in the digest LOWERS idea, not
+raises it; buzzwords (governance, platform, durable state, trust layer, safety kernel) must
+not raise any score by themselves.
+
+## Interest profile (grade "interest" against THIS user, not a generic audience)
+The user is a hands-on AI-tooling practitioner who researches coding-agent harnesses (Claude Code above all), runs agents in tmux/terminal, builds small local-first tools, and stars repos he can learn from or write an article about.
+HIGH interest (8-10):
+- Coding-agent harness internals & workflow engineering: Claude Code hooks, CLAUDE.md/instruction design, permissions, subagents, slash commands, session protocols, playbooks distilled from real practice.
+- Agent observability & debugging: recording/replaying/diffing agent sessions, monitoring running agents (tmux/TUI/status bars), trace analysis, cost and behavior debugging.
+- Verified knowledge & memory for agents: grounding, provenance, measured/exam-scored knowledge, anti-hallucination mechanisms, RAG that can prove where an answer came from.
+- Local-first, self-hosted small tools with craft: SQLite/DuckDB-backed CLIs, personal MCP servers, "home-cooked software" — small, personal, opinionated, no SaaS dependency.
+MEDIUM interest (5-7):
+- Terminal/tmux/TUI/CLI craftsmanship; developer-workflow plugins.
+- Agent skills/plugins that distill real practice or concrete failures into reusable instructions.
+- Multi-agent orchestration with a concrete working mechanism (not a vision or architecture diagram).
+- A novel opinionated mechanism worth writing an article about (manifesto plus working code).
+LOW interest (1-4), even when well-engineered:
+- Enterprise/governance/compliance frameworks, standards documents, "platforms", "control planes".
+- Yet-another RAG chat app, generic memory engine, thin wrapper over a provider API.
+- Vertical business apps outside developer tooling (fintech, HR, healthcare, government data catalogs).
+- Starter templates, personal config dumps, awesome-lists, directory/catalog sites, tutorials.
+- Grand claims ("outperforms X", "safety kernel", "autonomous platform") without a small runnable mechanism visible in the code.
+Exception: a repo in a "boring category" (e.g. a portfolio site) can still score HIGH when the digest shows unusual craft and a real mechanism (grounded local RAG with committed embeddings, thought-through security boundaries). Judge the mechanism in the code, not the category or the ambition of the README.
+
 MALICIOUS-BEHAVIOUR SCREEN (highest priority): set security_flag=true when the digest shows
 credential / API-token / SSH-key / .env / browser-cookie harvesting sent off-host; file,
 clipboard or environment exfiltration; obfuscated or base64/hex payloads run via
@@ -65,6 +97,8 @@ export function parseEvaluation(text: string): Evaluation {
   return {
     idea: toScore(data.idea),
     skill: toScore(data.skill),
+    interest: toScore(data.interest),
+    interestReason: sanitize(data.interest_reason).slice(0, 300),
     description: sanitize(data.description),
     securityFlag: flagged,
     securityReason: flagged ? (reason || "flagged as malicious (no reason given)") : "",

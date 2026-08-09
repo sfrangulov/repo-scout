@@ -23,13 +23,15 @@ function readKey(): Promise<string> {
 }
 
 function show(entry: Entry, index: number, total: number): void {
-  const sum = (entry.idea ?? 0) + (entry.skill ?? 0);
   console.log("");
   console.log(
-    `[${index + 1}/${total}] ${entry.repo}   idea ${entry.idea?.toFixed(1)}` +
-    `  skill ${entry.skill?.toFixed(1)}  sum ${sum.toFixed(1)}   (query: ${entry.query})`,
+    `[${index + 1}/${total}] ${entry.repo}   interest ${entry.interest?.toFixed(1)}` +
+    `  idea ${entry.idea?.toFixed(1)}  skill ${entry.skill?.toFixed(1)}   (query: ${entry.query})`,
   );
   console.log(`  ${entry.description ?? ""}`);
+  if (entry.interestReason) {
+    console.log(`  why: ${entry.interestReason}`);
+  }
   if (entry.securityFlag) {
     console.log(`  SECURITY WARNING: ${entry.securityReason}`);
   }
@@ -42,25 +44,25 @@ function show(entry: Entry, index: number, total: number): void {
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
-    options: { "min-score": { type: "string" } },
+    options: { "min-interest": { type: "string" } },
   });
-  const minScore = values["min-score"] !== undefined
-    ? Number(values["min-score"])
-    : config.reviewThreshold;
-  if (!Number.isFinite(minScore)) {
-    console.error("--min-score must be a number");
+  const minInterest = values["min-interest"] !== undefined
+    ? Number(values["min-interest"])
+    : config.interestThreshold;
+  if (!Number.isFinite(minInterest)) {
+    console.error("--min-interest must be a number");
     process.exit(2);
   }
 
   ensureGhReady(run);
   const db = openDb(config.dbPath);
-  const queue = reviewQueue(db, minScore);
+  const queue = reviewQueue(db, minInterest, config.minSkill);
 
   if (queue.length === 0) {
-    const s = stats(db, minScore);
+    const s = stats(db, minInterest, config.minSkill);
     console.log(
-      `queue is empty: ${s.belowThreshold} evaluated below ${minScore}` +
-      ` (try --min-score), ${s.new} awaiting evaluation (run scan)`,
+      `queue is empty: ${s.belowThreshold} evaluated below ${minInterest}` +
+      ` (try --min-interest), ${s.new} awaiting evaluation (run scan)`,
     );
     return;
   }
@@ -120,7 +122,7 @@ async function main(): Promise<void> {
 
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.stdin.pause();
-  const s = stats(db, minScore);
+  const s = stats(db, minInterest, config.minSkill);
   console.log(`\nreviewed ${s.reviewed} total; starred ${s.starred}, followed ${s.followed}`);
 }
 

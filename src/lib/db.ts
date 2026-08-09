@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS entries (
   evaluated_at    TEXT,
   idea            REAL,
   skill           REAL,
+  interest        REAL,
+  interest_reason TEXT NOT NULL DEFAULT '',
   description     TEXT,
   security_flag   INTEGER NOT NULL DEFAULT 0,
   security_reason TEXT NOT NULL DEFAULT '',
@@ -25,6 +27,18 @@ CREATE TABLE IF NOT EXISTS entries (
   reviewed_at     TEXT
 )`;
 
+// Guards existing databases created before the interest columns existed.
+function migrate(db: DatabaseSync): void {
+  const columns = (db.prepare("PRAGMA table_info(entries)").all() as Array<{ name: string }>)
+    .map(c => c.name);
+  if (!columns.includes("interest")) {
+    db.exec("ALTER TABLE entries ADD COLUMN interest REAL");
+  }
+  if (!columns.includes("interest_reason")) {
+    db.exec("ALTER TABLE entries ADD COLUMN interest_reason TEXT NOT NULL DEFAULT ''");
+  }
+}
+
 export function openDb(dbPath: string): DatabaseSync {
   let path = dbPath;
   if (path !== ":memory:") {
@@ -33,6 +47,7 @@ export function openDb(dbPath: string): DatabaseSync {
   }
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
+  migrate(db);
   return db;
 }
 
@@ -63,6 +78,8 @@ function toEntry(row: Row): Entry {
     evaluatedAt: (row.evaluated_at as string) ?? null,
     idea: (row.idea as number) ?? null,
     skill: (row.skill as number) ?? null,
+    interest: (row.interest as number) ?? null,
+    interestReason: (row.interest_reason as string) ?? "",
     description: (row.description as string) ?? null,
     securityFlag: row.security_flag === 1,
     securityReason: row.security_reason as string,
@@ -93,12 +110,18 @@ export function listNew(db: DatabaseSync): Entry[] {
 export function saveEvaluation(
   db: DatabaseSync,
   repo: string,
-  e: { idea: number; skill: number; description: string; securityFlag: boolean; securityReason: string },
+  e: {
+    idea: number; skill: number; interest: number; interestReason: string;
+    description: string; securityFlag: boolean; securityReason: string;
+  },
 ): void {
   db.prepare(
-    `UPDATE entries SET idea = ?, skill = ?, description = ?, security_flag = ?,
-     security_reason = ?, status = 'evaluated', evaluated_at = ? WHERE repo = ?`,
-  ).run(e.idea, e.skill, e.description, e.securityFlag ? 1 : 0, e.securityReason, now(), repo);
+    `UPDATE entries SET idea = ?, skill = ?, interest = ?, interest_reason = ?, description = ?,
+     security_flag = ?, security_reason = ?, status = 'evaluated', evaluated_at = ? WHERE repo = ?`,
+  ).run(
+    e.idea, e.skill, e.interest, e.interestReason, e.description,
+    e.securityFlag ? 1 : 0, e.securityReason, now(), repo,
+  );
 }
 
 export function recordFailure(
@@ -111,13 +134,14 @@ export function recordFailure(
   ).run(opts.terminal ? 1 : 0, repo);
 }
 
-export function reviewQueue(db: DatabaseSync, minScore: number): Entry[] {
+export function reviewQueue(db: DatabaseSync, minInterest: number, minSkill: number): Entry[] {
   return db
     .prepare(
-      `SELECT * FROM entries WHERE status = 'evaluated' AND (idea + skill >= ? OR security_flag = 1)
-       ORDER BY security_flag ASC, idea + skill DESC`,
+      `SELECT * FROM entries WHERE status = 'evaluated'
+       AND (security_flag = 1 OR (interest >= ? AND skill >= ?))
+       ORDER BY security_flag ASC, interest DESC, idea + skill DESC`,
     )
-    .all(minScore)
+    .all(minInterest, minSkill)
     .map(r => toEntry(r as Row));
 }
 
@@ -134,7 +158,7 @@ export function markReviewed(db: DatabaseSync, repo: string): void {
     .run(now(), repo);
 }
 
-export function stats(db: DatabaseSync, threshold: number) {
+export function stats(db: DatabaseSync, minInterest: number, minSkill: number) {
   const one = (sql: string, ...params: Array<string | number>) =>
     (db.prepare(sql).get(...params) as { n: number }).n;
   return {
@@ -142,7 +166,10 @@ export function stats(db: DatabaseSync, threshold: number) {
     new: one("SELECT COUNT(*) n FROM entries WHERE status = 'new'"),
     evaluated: one("SELECT COUNT(*) n FROM entries WHERE status = 'evaluated'"),
     belowThreshold: one(
-      "SELECT COUNT(*) n FROM entries WHERE status = 'evaluated' AND idea + skill < ?", threshold),
+      `SELECT COUNT(*) n FROM entries WHERE status = 'evaluated' AND security_flag = 0
+       AND (interest IS NULL OR interest < ? OR skill < ?)`,
+      minInterest, minSkill,
+    ),
     reviewed: one("SELECT COUNT(*) n FROM entries WHERE status = 'reviewed'"),
     failed: one("SELECT COUNT(*) n FROM entries WHERE status = 'failed'"),
     starred: one("SELECT COUNT(*) n FROM entries WHERE starred = 1"),
